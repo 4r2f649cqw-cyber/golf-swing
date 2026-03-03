@@ -12,6 +12,7 @@
             --panel-bg: #1c1c1e;
             --accent-neon: #00ff41;
             --text-main: #ffffff;
+            --accent-blue: #007aff;
         }
 
         body {
@@ -22,7 +23,7 @@
             color: var(--text-main);
             display: flex;
             flex-direction: column;
-            height: 100dvh; /* 動的ビューポート：ブラウザUIの変化に対応 */
+            height: 100dvh;
             overflow: hidden;
         }
 
@@ -40,32 +41,32 @@
             object-fit: contain;
         }
 
-        /* 下部操作パネル：Safari等のツールバー被り対策 */
         .controls-panel {
             background-color: var(--panel-bg);
             padding: 15px 15px calc(25px + env(safe-area-inset-bottom));
             border-top: 1px solid #444;
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 12px;
+            gap: 10px;
             z-index: 100;
-            box-shadow: 0 -5px 15px rgba(0,0,0,0.5);
         }
 
         button {
-            padding: 15px;
+            padding: 14px;
             border: none;
             border-radius: 12px;
             font-weight: bold;
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             color: #fff;
             background: #3a3a3c;
             -webkit-tap-highlight-color: transparent;
-            transition: transform 0.1s;
         }
-        button:active { transform: scale(0.96); opacity: 0.8; }
+        button:active { opacity: 0.8; transform: scale(0.98); }
+        button:disabled { opacity: 0.3; }
+
         .btn-primary { background-color: var(--accent-neon); color: #000; }
         .btn-record.active { background-color: #ff3b30; animation: pulse 1s infinite; }
+        .btn-download { background-color: var(--accent-blue); color: #fff; grid-column: span 2; }
 
         @keyframes pulse { 50% { opacity: 0.6; } }
 
@@ -75,12 +76,12 @@
             align-items: center;
             gap: 12px;
             background: rgba(0,0,0,0.5);
-            padding: 12px 15px;
+            padding: 10px 15px;
             border-radius: 10px;
             margin-bottom: 5px;
         }
         #seekBar { flex: 1; height: 30px; accent-color: var(--accent-neon); }
-        .time-label { font-family: 'Courier New', monospace; font-size: 0.9rem; min-width: 45px; color: var(--accent-neon); }
+        .time-label { font-family: monospace; font-size: 0.85rem; min-width: 45px; color: var(--accent-neon); }
 
         .status-msg {
             grid-column: span 2;
@@ -88,7 +89,6 @@
             text-align: center;
             color: #aaa;
             margin-top: -5px;
-            letter-spacing: 0.5px;
             text-transform: uppercase;
         }
     </style>
@@ -113,7 +113,9 @@
     <button id="recBtn" disabled>録画開始</button>
     <button id="playBtn">再生 / 停止</button>
 
-    <div class="status-msg" id="statusMsg">READY - TAP CAMERA START</div>
+    <button id="downloadBtn" class="btn-download" disabled>解析動画を保存</button>
+
+    <div class="status-msg" id="statusMsg">READY</div>
 </div>
 
 <script>
@@ -121,48 +123,41 @@
     const canvas = document.getElementById('outputCanvas');
     const ctx = canvas.getContext('2d');
     const recBtn = document.getElementById('recBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
     const statusMsg = document.getElementById('statusMsg');
     
     let stream = null;
     let isLive = false;
-    let facingMode = "environment"; // 外カメラ優先
+    let facingMode = "environment";
     let mediaRecorder = null;
     let chunks = [];
+    let recordedUrl = null;
 
-    // --- 高速化のためのMediaPipe設定 ---
     const pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
     });
     pose.setOptions({
-        modelComplexity: 0,     // 最軽量モデルを使用
-        smoothLandmarks: false, // 高速化のためスムージングをオフ
+        modelComplexity: 0,
+        smoothLandmarks: false,
         minDetectionConfidence: 0.5,
         minTrackingConfidence: 0.5
     });
 
-    // --- 60fps & 低解像度カメラ設定 ---
     async function startCamera() {
         if (stream) stream.getTracks().forEach(t => t.stop());
         try {
             stream = await navigator.mediaDevices.getUserMedia({ 
-                video: { 
-                    facingMode: facingMode, 
-                    width: { ideal: 640 }, 
-                    height: { ideal: 480 },
-                    frameRate: { ideal: 60 } 
-                } 
+                video: { facingMode: facingMode, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } } 
             });
             const settings = stream.getVideoTracks()[0].getSettings();
-            
             video.srcObject = stream;
-            video.src = null; 
+            video.src = null;
             await video.play();
             isLive = true;
             recBtn.disabled = false;
-            statusMsg.innerText = `LIVE: ${settings.width}x${settings.height} @${Math.round(settings.frameRate || 0)}fps`;
-        } catch (e) { 
-            alert("カメラを起動できません。設定を確認してください。"); 
-        }
+            downloadBtn.disabled = true; // 新しく撮影を始めたら保存ボタンを無効化
+            statusMsg.innerText = `LIVE: @${Math.round(settings.frameRate || 0)}fps`;
+        } catch (e) { alert("カメラを起動できません"); }
     }
 
     document.getElementById('camBtn').onclick = startCamera;
@@ -171,7 +166,6 @@
         if (isLive) startCamera();
     };
 
-    // --- 録画管理 (Canvasキャプチャ) ---
     recBtn.onclick = () => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
@@ -185,37 +179,51 @@
             mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             mediaRecorder.onstop = () => {
                 const blob = new Blob(chunks, { type: type || 'video/mp4' });
-                const url = URL.createObjectURL(blob);
+                recordedUrl = URL.createObjectURL(blob);
                 
                 isLive = false; 
                 video.srcObject = null;
-                video.src = url;
-                statusMsg.innerText = "REVIEW MODE (AI OFF)";
+                video.src = recordedUrl;
+                
+                statusMsg.innerText = "REVIEW MODE";
                 recBtn.innerText = "録画開始";
                 recBtn.classList.remove('active');
+                downloadBtn.disabled = false; // 保存ボタンを有効化
                 video.play();
             };
 
             mediaRecorder.start();
             recBtn.innerText = "録画停止";
             recBtn.classList.add('active');
+            downloadBtn.disabled = true;
             statusMsg.innerText = "RECORDING...";
         }
+    };
+
+    // ダウンロード処理
+    downloadBtn.onclick = () => {
+        if (!recordedUrl) return;
+        const a = document.createElement('a');
+        a.style.display = 'none';
+        a.href = recordedUrl;
+        a.download = `golf_analysis_${new Date().getTime()}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+            document.body.removeChild(a);
+        }, 100);
     };
 
     document.getElementById('playBtn').onclick = () => {
         if (video.paused) video.play(); else video.pause();
     };
 
-    // --- 描画ロジック ---
     function onResults(results) {
-        if (!isLive) return; // 二重表示防止
-
-        syncCanvasSize();
+        if (!isLive) return;
+        syncSize();
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-        
         if (results.poseLandmarks) {
             drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00ff41', lineWidth: 4});
             drawLandmarks(ctx, results.poseLandmarks, {color: '#ffffff', fillColor: '#00ff41', lineWidth: 2, radius: 4});
@@ -223,7 +231,7 @@
         ctx.restore();
     }
 
-    function syncCanvasSize() {
+    function syncSize() {
         if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
@@ -232,15 +240,12 @@
 
     pose.onResults(onResults);
 
-    // --- メイン処理ループ ---
     async function process() {
         if (video.readyState >= 2) {
             if (isLive) {
-                // ライブ時はAI解析を実施
                 await pose.send({image: video});
             } else {
-                // レビュー時はAIを通さず、録画済み映像をそのまま描画
-                syncCanvasSize();
+                syncSize();
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
             }
@@ -249,7 +254,6 @@
     }
     process();
 
-    // UIシンクロ
     video.ontimeupdate = () => {
         if (!isLive) {
             document.getElementById('curTime').innerText = formatTime(video.currentTime);
