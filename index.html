@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Golf Skeleton Mobile</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <style>
+        :root {
+            --bg-dark: #0a0a0c;
+            --panel-bg: #1c1c1e;
+            --accent-neon: #00ff41;
+            --text-main: #ffffff;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* メインビュー：上部に配置 */
+        .main-view {
+            flex: 1;
+            position: relative;
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        video, canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        /* 操作パネル：下部に配置 */
+        .controls-panel {
+            background-color: var(--panel-bg);
+            padding: 15px;
+            border-top: 1px solid #333;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            max-height: 40vh;
+            overflow-y: auto;
+        }
+
+        .full-width { grid-column: span 2; }
+
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            color: #fff;
+            background: #3a3a3c;
+        }
+        .btn-primary { background-color: var(--accent-neon); color: #000; }
+        .btn-record { background-color: #ff3b30; }
+
+        .status-bar {
+            grid-column: span 2;
+            font-size: 0.7rem;
+            text-align: center;
+            color: #888;
+        }
+
+        /* シークバー周り */
+        .seek-box {
+            grid-column: span 2;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: monospace;
+            background: rgba(0,0,0,0.3);
+            padding: 5px 10px;
+            border-radius: 5px;
+        }
+        input[type="range"] { flex: 1; accent-color: var(--accent-neon); }
+    </style>
+</head>
+<body>
+
+<div class="main-view">
+    <video id="inputVideo" playsinline muted></video>
+    <canvas id="outputCanvas"></canvas>
+</div>
+
+<div class="controls-panel">
+    <button id="camBtn" class="btn-primary">カメラ起動</button>
+    <button id="switchCamBtn">カメラ切替</button>
+    
+    <button id="recBtn" class="btn-record" disabled>録画開始</button>
+    <button id="resetBtn">リセット</button>
+
+    <div class="seek-box">
+        <span id="curTime">00:00</span>
+        <input type="range" id="seekBar" value="0" step="0.1">
+        <span id="durTime">00:00</span>
+    </div>
+
+    <button id="playBtn" class="full-width">PLAY / PAUSE</button>
+    
+    <div class="status-bar">
+        STATUS: <span id="statusMsg">READY</span>
+    </div>
+</div>
+
+<script>
+    const video = document.getElementById('inputVideo');
+    const canvas = document.getElementById('outputCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    let stream = null;
+    let isLive = false;
+    let facingMode = "environment"; // 背面カメラをデフォルトに
+
+    // MediaPipe設定（スマホ向けにモデルを軽量化）
+    const pose = new Pose({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+    });
+    pose.setOptions({
+        modelComplexity: 0, // 0にすることでスマホでの処理負荷を大幅軽減
+        smoothLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+    });
+
+    async function startCamera() {
+        if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+        }
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    facingMode: facingMode,
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                } 
+            });
+            video.srcObject = stream;
+            video.play();
+            isLive = true;
+            document.getElementById('recBtn').disabled = false;
+            document.getElementById('statusMsg').innerText = "LIVE - " + facingMode.toUpperCase();
+        } catch (e) { alert("カメラの起動に失敗しました。"); }
+    }
+
+    document.getElementById('camBtn').onclick = startCamera;
+
+    document.getElementById('switchCamBtn').onclick = () => {
+        facingMode = (facingMode === "user") ? "environment" : "user";
+        if (isLive) startCamera();
+    };
+
+    document.getElementById('playBtn').onclick = () => {
+        if (video.paused) video.play();
+        else video.pause();
+    };
+
+    // 描画処理
+    function onResults(results) {
+        if (!results.poseLandmarks) return;
+        if (canvas.width !== video.videoWidth) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00ff41aa', lineWidth: 4});
+        drawLandmarks(ctx, results.poseLandmarks, {color: '#00ff41', lineWidth: 1, radius: 4});
+    }
+
+    pose.onResults(onResults);
+
+    async function process() {
+        if ((isLive || (!video.paused && !video.ended)) && video.readyState >= 2) {
+            await pose.send({image: video});
+        }
+        requestAnimationFrame(process);
+    }
+    process();
+
+    // 時間表示の簡易フォーマット
+    video.ontimeupdate = () => {
+        const cur = Math.floor(video.currentTime);
+        document.getElementById('curTime').innerText = `00:${cur < 10 ? '0'+cur : cur}`;
+        document.getElementById('seekBar').value = video.currentTime;
+    };
+    video.onloadedmetadata = () => {
+        document.getElementById('seekBar').max = video.duration;
+    };
+</script>
+</body>
+</html>
