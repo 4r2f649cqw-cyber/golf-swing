@@ -13,6 +13,7 @@
             --accent-neon: #00ff41;
             --text-main: #ffffff;
             --accent-blue: #007aff;
+            --accent-purple: #af52de;
         }
 
         body {
@@ -43,28 +44,29 @@
 
         .controls-panel {
             background-color: var(--panel-bg);
-            padding: 15px 15px calc(25px + env(safe-area-inset-bottom));
+            padding: 12px 12px calc(20px + env(safe-area-inset-bottom));
             border-top: 1px solid #444;
             display: grid;
             grid-template-columns: 1fr 1fr;
-            gap: 10px;
+            gap: 8px;
             z-index: 100;
         }
 
         button {
-            padding: 14px;
+            padding: 12px;
             border: none;
-            border-radius: 12px;
+            border-radius: 10px;
             font-weight: bold;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             color: #fff;
             background: #3a3a3c;
             -webkit-tap-highlight-color: transparent;
         }
         button:active { opacity: 0.8; transform: scale(0.98); }
-        button:disabled { opacity: 0.3; }
+        button:disabled { opacity: 0.2; }
 
         .btn-primary { background-color: var(--accent-neon); color: #000; }
+        .btn-upload { background-color: var(--accent-purple); color: #fff; }
         .btn-record.active { background-color: #ff3b30; animation: pulse 1s infinite; }
         .btn-download { background-color: var(--accent-blue); color: #fff; grid-column: span 2; }
 
@@ -74,23 +76,24 @@
             grid-column: span 2;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             background: rgba(0,0,0,0.5);
-            padding: 10px 15px;
+            padding: 8px 12px;
             border-radius: 10px;
-            margin-bottom: 5px;
+            margin-bottom: 2px;
         }
         #seekBar { flex: 1; height: 30px; accent-color: var(--accent-neon); }
-        .time-label { font-family: monospace; font-size: 0.85rem; min-width: 45px; color: var(--accent-neon); }
+        .time-label { font-family: monospace; font-size: 0.8rem; min-width: 40px; color: var(--accent-neon); }
 
         .status-msg {
             grid-column: span 2;
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             text-align: center;
             color: #aaa;
-            margin-top: -5px;
             text-transform: uppercase;
         }
+        
+        #fileInput { display: none; }
     </style>
 </head>
 <body>
@@ -108,14 +111,16 @@
     </div>
 
     <button id="camBtn" class="btn-primary">カメラ起動</button>
+    <button id="uploadBtn" class="btn-upload">動画を選択</button>
+    <input type="file" id="fileInput" accept="video/*">
+    
     <button id="switchCamBtn">前後切替</button>
+    <button id="playBtn">再生 / 停止</button>
     
     <button id="recBtn" disabled>録画開始</button>
-    <button id="playBtn">再生 / 停止</button>
-
     <button id="downloadBtn" class="btn-download" disabled>解析動画を保存</button>
 
-    <div class="status-msg" id="statusMsg">READY</div>
+    <div class="status-msg" id="statusMsg">READY - SELECT SOURCE</div>
 </div>
 
 <script>
@@ -125,9 +130,11 @@
     const recBtn = document.getElementById('recBtn');
     const downloadBtn = document.getElementById('downloadBtn');
     const statusMsg = document.getElementById('statusMsg');
+    const fileInput = document.getElementById('fileInput');
     
     let stream = null;
     let isLive = false;
+    let needsSensing = true; // 骨格検知を行うかどうかのフラグ
     let facingMode = "environment";
     let mediaRecorder = null;
     let chunks = [];
@@ -143,29 +150,50 @@
         minTrackingConfidence: 0.5
     });
 
+    // --- カメラソース ---
     async function startCamera() {
         if (stream) stream.getTracks().forEach(t => t.stop());
         try {
             stream = await navigator.mediaDevices.getUserMedia({ 
                 video: { facingMode: facingMode, width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 60 } } 
             });
-            const settings = stream.getVideoTracks()[0].getSettings();
             video.srcObject = stream;
             video.src = null;
             await video.play();
             isLive = true;
+            needsSensing = true;
             recBtn.disabled = false;
-            downloadBtn.disabled = true; // 新しく撮影を始めたら保存ボタンを無効化
-            statusMsg.innerText = `LIVE: @${Math.round(settings.frameRate || 0)}fps`;
+            downloadBtn.disabled = true;
+            statusMsg.innerText = "LIVE STREAMING";
         } catch (e) { alert("カメラを起動できません"); }
     }
 
     document.getElementById('camBtn').onclick = startCamera;
+
+    // --- ファイルアップロードソース ---
+    document.getElementById('uploadBtn').onclick = () => fileInput.click();
+    fileInput.onchange = (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            if (stream) stream.getTracks().forEach(t => t.stop());
+            recordedUrl = URL.createObjectURL(file);
+            video.srcObject = null;
+            video.src = recordedUrl;
+            isLive = false;
+            needsSensing = true; // アップロード動画は骨格がないので検知ON
+            recBtn.disabled = false;
+            downloadBtn.disabled = true;
+            video.play();
+            statusMsg.innerText = "FILE LOADED - SENSING ON";
+        }
+    };
+
     document.getElementById('switchCamBtn').onclick = () => {
         facingMode = (facingMode === "user") ? "environment" : "user";
         if (isLive) startCamera();
     };
 
+    // --- 録画・保存管理 ---
     recBtn.onclick = () => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
@@ -182,13 +210,14 @@
                 recordedUrl = URL.createObjectURL(blob);
                 
                 isLive = false; 
+                needsSensing = false; // 録画済み動画は骨格が焼き付いているので検知OFF
                 video.srcObject = null;
                 video.src = recordedUrl;
                 
-                statusMsg.innerText = "REVIEW MODE";
+                statusMsg.innerText = "REVIEW MODE (Sensing Off)";
                 recBtn.innerText = "録画開始";
                 recBtn.classList.remove('active');
-                downloadBtn.disabled = false; // 保存ボタンを有効化
+                downloadBtn.disabled = false;
                 video.play();
             };
 
@@ -196,30 +225,25 @@
             recBtn.innerText = "録画停止";
             recBtn.classList.add('active');
             downloadBtn.disabled = true;
-            statusMsg.innerText = "RECORDING...";
+            statusMsg.innerText = "RECORDING CANVAS...";
         }
     };
 
-    // ダウンロード処理
     downloadBtn.onclick = () => {
         if (!recordedUrl) return;
         const a = document.createElement('a');
-        a.style.display = 'none';
         a.href = recordedUrl;
         a.download = `golf_analysis_${new Date().getTime()}.mp4`;
-        document.body.appendChild(a);
         a.click();
-        setTimeout(() => {
-            document.body.removeChild(a);
-        }, 100);
     };
 
     document.getElementById('playBtn').onclick = () => {
         if (video.paused) video.play(); else video.pause();
     };
 
+    // --- 描画・ループ ---
     function onResults(results) {
-        if (!isLive) return;
+        if (!isLive && !needsSensing) return; 
         syncSize();
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -242,7 +266,7 @@
 
     async function process() {
         if (video.readyState >= 2) {
-            if (isLive) {
+            if (isLive || needsSensing) {
                 await pose.send({image: video});
             } else {
                 syncSize();
