@@ -30,7 +30,7 @@
 
         .controls-panel {
             background-color: var(--panel-bg);
-            padding: 12px 12px calc(20px + env(safe-area-inset-bottom));
+            padding: 10px 12px calc(20px + env(safe-area-inset-bottom));
             border-top: 1px solid #444;
             display: grid; grid-template-columns: 1fr 1fr; gap: 8px; z-index: 100;
         }
@@ -50,14 +50,17 @@
 
         @keyframes pulse { 50% { opacity: 0.6; } }
 
-        .seek-box {
-            grid-column: span 2; display: flex; align-items: center; gap: 10px;
-            background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 10px; margin-bottom: 2px;
+        /* スライダーセクション */
+        .slider-group {
+            grid-column: span 2; display: flex; flex-direction: column; gap: 4px;
+            background: rgba(0,0,0,0.3); padding: 8px; border-radius: 10px; margin-bottom: 4px;
         }
-        #seekBar { flex: 1; height: 30px; accent-color: var(--accent-neon); }
-        .time-label { font-family: monospace; font-size: 0.8rem; min-width: 40px; color: var(--accent-neon); }
+        .slider-row { display: flex; align-items: center; gap: 10px; }
+        input[type="range"] { flex: 1; height: 38px; accent-color: var(--accent-neon); margin: 0; }
+        .label-text { font-family: monospace; font-size: 0.8rem; color: var(--accent-neon); min-width: 45px; text-align: center; }
+        .title-text { font-size: 0.65rem; color: #888; text-transform: uppercase; font-weight: bold; }
 
-        .status-msg { grid-column: span 2; font-size: 0.65rem; text-align: center; color: #aaa; text-transform: uppercase; }
+        .status-msg { grid-column: span 2; font-size: 0.6rem; text-align: center; color: #777; margin-top: 2px; }
         #fileInput { display: none; }
     </style>
 </head>
@@ -70,10 +73,20 @@
 </div>
 
 <div class="controls-panel">
-    <div class="seek-box">
-        <span class="time-label" id="curTime">0:00</span>
-        <input type="range" id="seekBar" value="0" step="0.01">
-        <span class="time-label" id="durTime">0:00</span>
+    <div class="slider-group">
+        <div class="title-text">Seek / Time</div>
+        <div class="slider-row">
+            <span class="label-text" id="curTime">0:00</span>
+            <input type="range" id="seekBar" value="0" step="0.01">
+            <span class="label-text" id="durTime">0:00</span>
+        </div>
+        
+        <div class="title-text">Playback Speed</div>
+        <div class="slider-row">
+            <span class="label-text">SLOW</span>
+            <input type="range" id="speedBar" min="0.2" max="1.0" step="0.05" value="1.0">
+            <span class="label-text" id="speedVal">1.0x</span>
+        </div>
     </div>
 
     <button id="camBtn" class="btn-primary">カメラ起動</button>
@@ -98,13 +111,15 @@
     
     const recBtn = document.getElementById('recBtn');
     const downloadBtn = document.getElementById('downloadBtn');
+    const speedBar = document.getElementById('speedBar');
+    const speedVal = document.getElementById('speedVal');
     const statusMsg = document.getElementById('statusMsg');
     const fileInput = document.getElementById('fileInput');
     
     let stream = null;
     let isLive = false;
     let needsSensing = true;
-    let isProcessing = false; // AI処理中フラグ
+    let isProcessing = false;
     let facingMode = "environment";
     let mediaRecorder = null;
     let chunks = [];
@@ -120,6 +135,13 @@
         minTrackingConfidence: 0.5
     });
 
+    // スピード変更の反映
+    speedBar.oninput = (e) => {
+        const val = e.target.value;
+        video.playbackRate = val;
+        speedVal.innerText = parseFloat(val).toFixed(1) + "x";
+    };
+
     async function startCamera() {
         if (stream) stream.getTracks().forEach(t => t.stop());
         try {
@@ -128,7 +150,7 @@
             });
             video.srcObject = stream;
             video.src = null;
-            video.playbackRate = 1.0;
+            video.playbackRate = speedBar.value;
             await video.play();
             isLive = true;
             needsSensing = true;
@@ -148,12 +170,13 @@
             recordedUrl = URL.createObjectURL(file);
             video.srcObject = null;
             video.src = recordedUrl;
+            video.playbackRate = speedBar.value;
             isLive = false;
             needsSensing = true;
             recBtn.disabled = false;
             downloadBtn.disabled = true;
             video.play();
-            statusMsg.innerText = "PROCESSING FILE...";
+            statusMsg.innerText = "FILE LOADED";
         }
     };
 
@@ -197,9 +220,8 @@
     };
 
     function onResults(results) {
-        isProcessing = false; // 処理完了
+        isProcessing = false;
         if (!isLive && !needsSensing) return; 
-        
         syncSize(canvas, video);
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -224,14 +246,9 @@
         if (video.readyState >= 2 && !video.paused) {
             if ((isLive || needsSensing) && !isProcessing) {
                 isProcessing = true;
-                
-                // AI用の軽量キャンバス（幅480px固定）にリサイズして描画
                 const aspect = video.videoHeight / video.videoWidth;
-                procCanvas.width = 480;
-                procCanvas.height = 480 * aspect;
+                procCanvas.width = 480; procCanvas.height = 480 * aspect;
                 pCtx.drawImage(video, 0, 0, procCanvas.width, procCanvas.height);
-                
-                // リサイズした画像をAIに送る
                 await pose.send({image: procCanvas});
             } else if (!isLive && !needsSensing) {
                 syncSize(canvas, video);
@@ -253,6 +270,7 @@
         if (!isLive) {
             document.getElementById('durTime').innerText = formatTime(video.duration);
             document.getElementById('seekBar').max = video.duration;
+            video.playbackRate = speedBar.value;
         }
     };
     document.getElementById('seekBar').oninput = (e) => {
