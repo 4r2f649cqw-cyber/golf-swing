@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Golf Skeleton Pro Selector</title>
+    <title>Golf Skeleton Pro Ultimate</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <style>
@@ -40,11 +40,11 @@
         #settingsArea {
             max-height: 0;
             overflow: hidden;
-            transition: max-height 0.3s ease-out;
+            transition: max-height 0.4s ease-out;
             background: rgba(0,0,0,0.3);
         }
         #settingsArea.open {
-            max-height: 500px;
+            max-height: 550px;
             border-bottom: 1px solid #333;
         }
 
@@ -64,7 +64,6 @@
             padding: 14px 5px; border: none; border-radius: 12px;
             font-weight: bold; font-size: 0.85rem; color: #fff; background: #3a3a3c;
             -webkit-tap-highlight-color: transparent;
-            display: flex; align-items: center; justify-content: center;
         }
         button:active { opacity: 0.8; transform: scale(0.96); }
         button:disabled { opacity: 0.2; }
@@ -77,28 +76,12 @@
         .btn-sub { font-size: 0.75rem; padding: 10px; }
         .btn-cam { background-color: var(--accent-neon); color: #000; }
         .btn-up { background-color: var(--accent-purple); }
-        .btn-dl { background-color: var(--accent-blue); grid-column: span 2; }
+        .btn-dl-raw { background-color: #555; grid-column: span 1; }
+        .btn-dl-skel { background-color: var(--accent-blue); grid-column: span 1; }
 
-        /* セレクター（録画モード用） */
-        .mode-selector {
-            display: flex;
-            background: #2c2c2e;
-            border-radius: 8px;
-            padding: 2px;
-            margin-top: 5px;
-        }
-        .mode-option {
-            flex: 1;
-            text-align: center;
-            padding: 8px;
-            font-size: 0.75rem;
-            border-radius: 6px;
-            color: #888;
-        }
-        .mode-option.active {
-            background: #444;
-            color: var(--accent-neon);
-            font-weight: bold;
+        .toggle-box {
+            display: flex; align-items: center; justify-content: space-between;
+            background: #2c2c2e; padding: 10px 15px; border-radius: 10px;
         }
 
         @keyframes pulse { 50% { opacity: 0.6; } }
@@ -110,6 +93,14 @@
 
         .status-bar { font-size: 0.6rem; text-align: center; color: #555; padding-bottom: 5px; }
         #fileInput { display: none; }
+
+        /* スイッチのスタイル */
+        .switch { position: relative; display: inline-block; width: 40px; height: 22px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider-round { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #555; transition: .4s; border-radius: 34px; }
+        .slider-round:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; }
+        input:checked + .slider-round { background-color: var(--accent-neon); }
+        input:checked + .slider-round:before { transform: translateX(18px); }
     </style>
 </head>
 <body>
@@ -123,12 +114,12 @@
 <div class="controls-panel">
     <div id="settingsArea">
         <div class="settings-content">
-            <div>
-                <div class="title-text">Recording Mode</div>
-                <div class="mode-selector" id="recModeSelector">
-                    <div class="mode-option active" data-mode="skeleton">With Skeleton</div>
-                    <div class="mode-option" data-mode="raw">Raw Video Only</div>
-                </div>
+            <div class="toggle-box">
+                <span style="font-size: 0.85rem; font-weight: bold;">骨格オーバーレイを表示</span>
+                <label class="switch">
+                    <input type="checkbox" id="skelToggle" checked>
+                    <span class="slider-round"></span>
+                </label>
             </div>
 
             <div>
@@ -154,7 +145,8 @@
                 <button id="switchCamBtn" class="btn-sub">前後切替</button>
                 <button id="uploadBtn" class="btn-sub btn-up">動画を選択</button>
                 <input type="file" id="fileInput" accept="video/*">
-                <button id="downloadBtn" class="btn-sub btn-dl" disabled>解析動画を保存</button>
+                <button id="dlRawBtn" class="btn-sub btn-dl-raw" disabled>生動画を保存</button>
+                <button id="dlSkelBtn" class="btn-sub btn-dl-skel" disabled>骨格動画を保存</button>
             </div>
         </div>
     </div>
@@ -175,7 +167,9 @@
     const pCtx = procCanvas.getContext('2d');
     
     const recBtn = document.getElementById('recBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
+    const dlRawBtn = document.getElementById('dlRawBtn');
+    const dlSkelBtn = document.getElementById('dlSkelBtn');
+    const skelToggle = document.getElementById('skelToggle');
     const speedBar = document.getElementById('speedBar');
     const speedVal = document.getElementById('speedVal');
     const statusMsg = document.getElementById('statusMsg');
@@ -187,22 +181,17 @@
     let needsSensing = true;
     let isProcessing = false;
     let facingMode = "environment";
-    let mediaRecorder = null;
-    let chunks = [];
-    let recordedUrl = null;
-    let currentRecMode = "skeleton"; // "skeleton" or "raw"
+    
+    // 録画用
+    let rawRecorder = null;
+    let skelRecorder = null;
+    let rawChunks = [];
+    let skelChunks = [];
+    let rawUrl = null;
+    let skelUrl = null;
 
-    // --- UIトグル & モード切替 ---
+    // --- 設定パネル開閉 ---
     document.getElementById('toggleSettings').onclick = () => settingsArea.classList.toggle('open');
-
-    const modeOptions = document.querySelectorAll('.mode-option');
-    modeOptions.forEach(opt => {
-        opt.onclick = () => {
-            modeOptions.forEach(o => o.classList.remove('active'));
-            opt.classList.add('active');
-            currentRecMode = opt.dataset.mode;
-        };
-    });
 
     const pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -233,7 +222,7 @@
             isLive = true;
             needsSensing = true;
             recBtn.disabled = false;
-            downloadBtn.disabled = true;
+            dlRawBtn.disabled = dlSkelBtn.disabled = true;
             statusMsg.innerText = "LIVE STREAMING";
         } catch (e) { alert("カメラを起動できません"); }
     }
@@ -244,11 +233,12 @@
         const file = e.target.files[0];
         if (file) {
             if (stream) stream.getTracks().forEach(t => t.stop());
-            recordedUrl = URL.createObjectURL(file);
-            video.srcObject = null; video.src = recordedUrl;
+            const fileUrl = URL.createObjectURL(file);
+            video.srcObject = null; video.src = fileUrl;
             video.playbackRate = speedBar.value;
             isLive = false; needsSensing = true;
-            recBtn.disabled = false; downloadBtn.disabled = true;
+            recBtn.disabled = false;
+            dlRawBtn.disabled = dlSkelBtn.disabled = true;
             video.play();
             statusMsg.innerText = "FILE LOADED";
         }
@@ -259,48 +249,62 @@
         if (isLive) startCamera();
     };
 
-    // --- 録画管理 (モード切り替えロジック) ---
+    // --- 録画管理 (同時2系統録画) ---
     recBtn.onclick = () => {
-        if (mediaRecorder && mediaRecorder.state === "recording") {
-            mediaRecorder.stop();
+        if (rawRecorder && rawRecorder.state === "recording") {
+            rawRecorder.stop();
+            skelRecorder.stop();
         } else {
-            chunks = [];
+            rawChunks = []; skelChunks = [];
             
-            // モードに応じてソースを選択
-            let captureSource;
-            if (currentRecMode === "skeleton") {
-                captureSource = canvas.captureStream(30);
-            } else {
-                // Rawモード: ライブならカメラストリーム、ファイルならvideo要素から取得
-                captureSource = isLive ? stream : video.captureStream();
-            }
+            // 1. 生映像ソース (Raw)
+            const rawSource = isLive ? stream : video.captureStream();
+            // 2. 骨格映像ソース (Skeleton)
+            const skelSource = canvas.captureStream(30);
 
             const types = ['video/mp4', 'video/webm;codecs=vp8', 'video/webm'];
             const type = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
-            mediaRecorder = new MediaRecorder(captureSource, { mimeType: type });
             
-            mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-            mediaRecorder.onstop = () => {
-                const blob = new Blob(chunks, { type: type || 'video/mp4' });
-                recordedUrl = URL.createObjectURL(blob);
-                isLive = false;
-                // Rawで録画した場合は再度センシングが必要、Skeletonで録画した場合は不要
-                needsSensing = (currentRecMode === "raw"); 
-                
-                video.srcObject = null; video.src = recordedUrl;
-                statusMsg.innerText = "REVIEW MODE";
-                recBtn.innerText = "録画"; recBtn.classList.remove('active');
-                downloadBtn.disabled = false; video.play();
+            rawRecorder = new MediaRecorder(rawSource, { mimeType: type });
+            skelRecorder = new MediaRecorder(skelSource, { mimeType: type });
+
+            rawRecorder.ondataavailable = e => { if (e.data.size > 0) rawChunks.push(e.data); };
+            skelRecorder.ondataavailable = e => { if (e.data.size > 0) skelChunks.push(e.data); };
+
+            rawRecorder.onstop = () => {
+                const rawBlob = new Blob(rawChunks, { type: type || 'video/mp4' });
+                rawUrl = URL.createObjectURL(rawBlob);
+                dlRawBtn.disabled = false;
             };
-            mediaRecorder.start();
+
+            skelRecorder.onstop = () => {
+                const skelBlob = new Blob(skelChunks, { type: type || 'video/mp4' });
+                skelUrl = URL.createObjectURL(skelBlob);
+                
+                // 再生モードの切り替え
+                isLive = false;
+                needsSensing = true; // 生映像ベースで再生するのでセンシングは可能
+                video.srcObject = null;
+                video.src = rawUrl; // レビューには生動画を使い、骨格はリアルタイムで被せる
+                
+                statusMsg.innerText = "REVIEW MODE (Sensing Toggle Available)";
+                recBtn.innerText = "録画"; recBtn.classList.remove('active');
+                dlSkelBtn.disabled = false;
+                video.play();
+            };
+
+            rawRecorder.start();
+            skelRecorder.start();
             recBtn.innerText = "停止"; recBtn.classList.add('active');
-            statusMsg.innerText = "RECORDING (" + currentRecMode.toUpperCase() + ")...";
+            statusMsg.innerText = "RECORDING (DUAL)...";
         }
     };
 
-    downloadBtn.onclick = () => {
-        const a = document.createElement('a');
-        a.href = recordedUrl; a.download = `golf_${currentRecMode}_${new Date().getTime()}.mp4`; a.click();
+    dlRawBtn.onclick = () => {
+        const a = document.createElement('a'); a.href = rawUrl; a.download = `raw_${new Date().getTime()}.mp4`; a.click();
+    };
+    dlSkelBtn.onclick = () => {
+        const a = document.createElement('a'); a.href = skelUrl; a.download = `skel_${new Date().getTime()}.mp4`; a.click();
     };
 
     document.getElementById('playBtn').onclick = () => {
@@ -309,12 +313,15 @@
 
     function onResults(results) {
         isProcessing = false;
-        if (!isLive && !needsSensing) return; 
         syncSize(canvas, video);
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 背景映像
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-        if (results.poseLandmarks) {
+        
+        // スイッチがONの場合のみ骨格を描画
+        if (skelToggle.checked && results.poseLandmarks) {
             drawConnectors(ctx, results.poseLandmarks, POSE_CONNECTIONS, {color: '#00ff41', lineWidth: 4});
             drawLandmarks(ctx, results.poseLandmarks, {color: '#ffffff', fillColor: '#00ff41', lineWidth: 2, radius: 4});
         }
