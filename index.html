@@ -22,9 +22,7 @@
             color: var(--text-main);
             display: flex;
             flex-direction: column;
-            /* ブラウザのUIに合わせた高さ設定 */
-            height: 100vh;
-            height: 100dvh; 
+            height: 100dvh; /* 動的ビューポートでブラウザUIに対応 */
             overflow: hidden;
         }
 
@@ -42,10 +40,10 @@
             object-fit: contain;
         }
 
-        /* 下部操作パネルの調整 */
+        /* 下部パネル：Safariのツールバー対策で少し余裕を持たせる */
         .controls-panel {
             background-color: var(--panel-bg);
-            padding: 15px 15px calc(15px + env(safe-area-inset-bottom));
+            padding: 15px 15px calc(25px + env(safe-area-inset-bottom));
             border-top: 1px solid #333;
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -56,14 +54,14 @@
         button {
             padding: 14px;
             border: none;
-            border-radius: 10px;
+            border-radius: 12px;
             font-weight: bold;
             font-size: 0.9rem;
             color: #fff;
             background: #3a3a3c;
             -webkit-tap-highlight-color: transparent;
         }
-        button:active { opacity: 0.7; }
+        button:active { opacity: 0.7; transform: scale(0.98); }
         .btn-primary { background-color: var(--accent-neon); color: #000; }
         .btn-record.active { background-color: #ff3b30; animation: pulse 1s infinite; }
 
@@ -75,19 +73,21 @@
             align-items: center;
             gap: 12px;
             background: rgba(0,0,0,0.4);
-            padding: 8px 12px;
-            border-radius: 8px;
+            padding: 10px 15px;
+            border-radius: 10px;
             margin-bottom: 5px;
         }
-        #seekBar { flex: 1; height: 25px; accent-color: var(--accent-neon); }
-        .time-label { font-family: monospace; font-size: 0.8rem; min-width: 45px; }
+        #seekBar { flex: 1; height: 30px; accent-color: var(--accent-neon); }
+        .time-label { font-family: monospace; font-size: 0.85rem; min-width: 45px; color: var(--accent-neon); }
 
         .status-msg {
             grid-column: span 2;
-            font-size: 0.7rem;
+            font-size: 0.75rem;
             text-align: center;
             color: #888;
             margin-top: -5px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
     </style>
 </head>
@@ -109,7 +109,7 @@
     <button id="switchCamBtn">前後切替</button>
     
     <button id="recBtn" disabled>録画開始</button>
-    <button id="playBtn">再生 / 一時停止</button>
+    <button id="playBtn">再生 / 停止</button>
 
     <div class="status-msg" id="statusMsg">READY</div>
 </div>
@@ -143,6 +143,7 @@
                 video: { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } } 
             });
             video.srcObject = stream;
+            video.src = null; // 以前の録画URLをクリア
             await video.play();
             isLive = true;
             recBtn.disabled = false;
@@ -156,16 +157,12 @@
         if (isLive) startCamera();
     };
 
-    // --- 録画ロジック (Canvas録画) ---
     recBtn.onclick = () => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         } else {
             chunks = [];
-            // キャンバスからストリームを取得 (30fps)
             const canvasStream = canvas.captureStream(30);
-            
-            // iOS/Androidで動作しやすいMIMEタイプを選択
             const types = ['video/mp4', 'video/webm;codecs=vp8', 'video/webm'];
             const type = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
             
@@ -175,11 +172,11 @@
                 const blob = new Blob(chunks, { type: type || 'video/mp4' });
                 const url = URL.createObjectURL(blob);
                 
-                // プレビューモードへ切り替え
-                isLive = false;
+                // --- 重要：ここでレビューモードに切り替え ---
+                isLive = false; 
                 video.srcObject = null;
                 video.src = url;
-                document.getElementById('statusMsg').innerText = "REVIEW MODE";
+                document.getElementById('statusMsg').innerText = "REVIEW MODE (Sensing Off)";
                 recBtn.innerText = "録画開始";
                 recBtn.classList.remove('active');
                 video.play();
@@ -196,14 +193,13 @@
         if (video.paused) video.play(); else video.pause();
     };
 
+    // 骨格検知の結果が出た時の処理
     function onResults(results) {
-        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-        }
+        if (!isLive) return; // ライブ中でなければ何もしない（二重表示防止）
+
+        updateCanvasSize();
         ctx.save();
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // 背景としてビデオを描画
         ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
         
         if (results.poseLandmarks) {
@@ -213,11 +209,27 @@
         ctx.restore();
     }
 
+    function updateCanvasSize() {
+        if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+        }
+    }
+
     pose.onResults(onResults);
 
+    // メインループ
     async function process() {
         if (video.readyState >= 2) {
-            await pose.send({image: video});
+            if (isLive) {
+                // カメラ動作中はAI解析を実行
+                await pose.send({image: video});
+            } else {
+                // 録画再生中はAI解析を通さず、映像（骨格書き込み済み）をそのまま描画
+                updateCanvasSize();
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            }
         }
         requestAnimationFrame(process);
     }
