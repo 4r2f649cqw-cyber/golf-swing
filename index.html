@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Golf Skeleton Pro Mobile</title>
+    <title>Golf Skeleton Pro Compact</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <style>
@@ -14,6 +14,7 @@
             --text-main: #ffffff;
             --accent-blue: #007aff;
             --accent-purple: #af52de;
+            --danger: #ff3b30;
         }
 
         body {
@@ -28,39 +29,68 @@
         .main-view { flex: 1; position: relative; background-color: #000; overflow: hidden; }
         video, canvas { position: absolute; width: 100%; height: 100%; object-fit: contain; }
 
+        /* 操作パネルのベース */
         .controls-panel {
             background-color: var(--panel-bg);
-            padding: 10px 12px calc(20px + env(safe-area-inset-bottom));
-            border-top: 1px solid #444;
-            display: grid; grid-template-columns: 1fr 1fr; gap: 8px; z-index: 100;
+            border-top: 1px solid #333;
+            z-index: 100;
+            display: flex; flex-direction: column;
+            padding-bottom: env(safe-area-inset-bottom);
+        }
+
+        /* 折りたたみ設定エリア */
+        #settingsArea {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+            background: rgba(0,0,0,0.2);
+        }
+        #settingsArea.open {
+            max-height: 400px; /* 十分な高さ */
+            border-bottom: 1px solid #333;
+        }
+
+        .settings-content {
+            padding: 12px;
+            display: flex; flex-direction: column; gap: 10px;
+        }
+
+        /* メイン操作エリア（常に表示） */
+        .main-controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 10px;
+            padding: 12px;
         }
 
         button {
-            padding: 12px; border: none; border-radius: 10px;
+            padding: 14px 5px; border: none; border-radius: 12px;
             font-weight: bold; font-size: 0.85rem; color: #fff; background: #3a3a3c;
             -webkit-tap-highlight-color: transparent;
+            display: flex; align-items: center; justify-content: center; gap: 5px;
         }
-        button:active { opacity: 0.8; transform: scale(0.98); }
+        button:active { opacity: 0.8; transform: scale(0.96); }
         button:disabled { opacity: 0.2; }
 
-        .btn-primary { background-color: var(--accent-neon); color: #000; }
-        .btn-upload { background-color: var(--accent-purple); }
-        .btn-record.active { background-color: #ff3b30; animation: pulse 1s infinite; }
-        .btn-download { background-color: var(--accent-blue); grid-column: span 2; }
+        .btn-play { background-color: #444; }
+        .btn-record { background-color: var(--bg-dark); border: 2px solid var(--danger); color: var(--danger); }
+        .btn-record.active { background-color: var(--danger); color: #fff; animation: pulse 1s infinite; }
+        .btn-settings { background-color: #333; color: #aaa; }
+        
+        .btn-sub { font-size: 0.75rem; padding: 10px; }
+        .btn-cam { background-color: var(--accent-neon); color: #000; }
+        .btn-up { background-color: var(--accent-purple); }
+        .btn-dl { background-color: var(--accent-blue); grid-column: span 2; }
 
         @keyframes pulse { 50% { opacity: 0.6; } }
 
-        /* スライダーセクション */
-        .slider-group {
-            grid-column: span 2; display: flex; flex-direction: column; gap: 4px;
-            background: rgba(0,0,0,0.3); padding: 8px; border-radius: 10px; margin-bottom: 4px;
-        }
-        .slider-row { display: flex; align-items: center; gap: 10px; }
-        input[type="range"] { flex: 1; height: 38px; accent-color: var(--accent-neon); margin: 0; }
-        .label-text { font-family: monospace; font-size: 0.8rem; color: var(--accent-neon); min-width: 45px; text-align: center; }
-        .title-text { font-size: 0.65rem; color: #888; text-transform: uppercase; font-weight: bold; }
+        /* スライダー */
+        .slider-row { display: flex; align-items: center; gap: 10px; margin: 2px 0; }
+        input[type="range"] { flex: 1; height: 30px; accent-color: var(--accent-neon); }
+        .label-text { font-family: monospace; font-size: 0.75rem; color: var(--accent-neon); min-width: 40px; }
+        .title-text { font-size: 0.6rem; color: #777; text-transform: uppercase; margin-bottom: -5px; }
 
-        .status-msg { grid-column: span 2; font-size: 0.6rem; text-align: center; color: #777; margin-top: 2px; }
+        .status-bar { font-size: 0.6rem; text-align: center; color: #555; padding-bottom: 5px; }
         #fileInput { display: none; }
     </style>
 </head>
@@ -73,33 +103,42 @@
 </div>
 
 <div class="controls-panel">
-    <div class="slider-group">
-        <div class="title-text">Seek / Time</div>
-        <div class="slider-row">
-            <span class="label-text" id="curTime">0:00</span>
-            <input type="range" id="seekBar" value="0" step="0.01">
-            <span class="label-text" id="durTime">0:00</span>
-        </div>
-        
-        <div class="title-text">Playback Speed</div>
-        <div class="slider-row">
-            <span class="label-text">SLOW</span>
-            <input type="range" id="speedBar" min="0.2" max="1.0" step="0.05" value="1.0">
-            <span class="label-text" id="speedVal">1.0x</span>
+    <div id="settingsArea">
+        <div class="settings-content">
+            <div>
+                <div class="title-text">Seek / Time</div>
+                <div class="slider-row">
+                    <span class="label-text" id="curTime">0:00</span>
+                    <input type="range" id="seekBar" value="0" step="0.01">
+                    <span class="label-text" id="durTime">0:00</span>
+                </div>
+            </div>
+
+            <div>
+                <div class="title-text">Slow Motion</div>
+                <div class="slider-row">
+                    <span class="label-text">SPEED</span>
+                    <input type="range" id="speedBar" min="0.2" max="1.0" step="0.05" value="1.0">
+                    <span class="label-text" id="speedVal">1.0x</span>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <button id="camBtn" class="btn-sub btn-cam">カメラ開始</button>
+                <button id="switchCamBtn" class="btn-sub">前後切替</button>
+                <button id="uploadBtn" class="btn-sub btn-up">動画を選択</button>
+                <input type="file" id="fileInput" accept="video/*">
+                <button id="downloadBtn" class="btn-sub btn-dl" disabled>解析動画を保存</button>
+            </div>
         </div>
     </div>
 
-    <button id="camBtn" class="btn-primary">カメラ起動</button>
-    <button id="uploadBtn" class="btn-upload">動画を選択</button>
-    <input type="file" id="fileInput" accept="video/*">
-    
-    <button id="switchCamBtn">前後切替</button>
-    <button id="playBtn">再生 / 停止</button>
-    
-    <button id="recBtn" disabled>録画開始</button>
-    <button id="downloadBtn" class="btn-download" disabled>解析動画を保存</button>
-
-    <div class="status-msg" id="statusMsg">READY</div>
+    <div class="main-controls">
+        <button id="playBtn" class="btn-play">再生/停止</button>
+        <button id="recBtn" class="btn-record" disabled>録画</button>
+        <button id="toggleSettings" class="btn-settings">設定 ⚙</button>
+    </div>
+    <div class="status-bar" id="statusMsg">READY</div>
 </div>
 
 <script>
@@ -115,7 +154,8 @@
     const speedVal = document.getElementById('speedVal');
     const statusMsg = document.getElementById('statusMsg');
     const fileInput = document.getElementById('fileInput');
-    
+    const settingsArea = document.getElementById('settingsArea');
+
     let stream = null;
     let isLive = false;
     let needsSensing = true;
@@ -124,6 +164,11 @@
     let mediaRecorder = null;
     let chunks = [];
     let recordedUrl = null;
+
+    // --- UIトグル ---
+    document.getElementById('toggleSettings').onclick = () => {
+        settingsArea.classList.toggle('open');
+    };
 
     const pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -135,7 +180,6 @@
         minTrackingConfidence: 0.5
     });
 
-    // スピード変更の反映
     speedBar.oninput = (e) => {
         const val = e.target.value;
         video.playbackRate = val;
@@ -161,7 +205,6 @@
     }
 
     document.getElementById('camBtn').onclick = startCamera;
-
     document.getElementById('uploadBtn').onclick = () => fileInput.click();
     fileInput.onchange = (e) => {
         const file = e.target.files[0];
@@ -201,11 +244,11 @@
                 isLive = false; needsSensing = false;
                 video.srcObject = null; video.src = recordedUrl;
                 statusMsg.innerText = "REVIEW MODE";
-                recBtn.innerText = "録画開始"; recBtn.classList.remove('active');
+                recBtn.innerText = "録画"; recBtn.classList.remove('active');
                 downloadBtn.disabled = false; video.play();
             };
             mediaRecorder.start();
-            recBtn.innerText = "録画停止"; recBtn.classList.add('active');
+            recBtn.innerText = "停止"; recBtn.classList.add('active');
             statusMsg.innerText = "RECORDING...";
         }
     };
