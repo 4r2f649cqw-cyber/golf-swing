@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Golf Skeleton Pro Compact</title>
+    <title>Golf Skeleton Pro Selector</title>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
     <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
     <style>
@@ -29,7 +29,6 @@
         .main-view { flex: 1; position: relative; background-color: #000; overflow: hidden; }
         video, canvas { position: absolute; width: 100%; height: 100%; object-fit: contain; }
 
-        /* 操作パネルのベース */
         .controls-panel {
             background-color: var(--panel-bg);
             border-top: 1px solid #333;
@@ -38,24 +37,22 @@
             padding-bottom: env(safe-area-inset-bottom);
         }
 
-        /* 折りたたみ設定エリア */
         #settingsArea {
             max-height: 0;
             overflow: hidden;
             transition: max-height 0.3s ease-out;
-            background: rgba(0,0,0,0.2);
+            background: rgba(0,0,0,0.3);
         }
         #settingsArea.open {
-            max-height: 400px; /* 十分な高さ */
+            max-height: 500px;
             border-bottom: 1px solid #333;
         }
 
         .settings-content {
-            padding: 12px;
-            display: flex; flex-direction: column; gap: 10px;
+            padding: 15px;
+            display: flex; flex-direction: column; gap: 12px;
         }
 
-        /* メイン操作エリア（常に表示） */
         .main-controls {
             display: grid;
             grid-template-columns: 1fr 1fr 1fr;
@@ -67,7 +64,7 @@
             padding: 14px 5px; border: none; border-radius: 12px;
             font-weight: bold; font-size: 0.85rem; color: #fff; background: #3a3a3c;
             -webkit-tap-highlight-color: transparent;
-            display: flex; align-items: center; justify-content: center; gap: 5px;
+            display: flex; align-items: center; justify-content: center;
         }
         button:active { opacity: 0.8; transform: scale(0.96); }
         button:disabled { opacity: 0.2; }
@@ -82,13 +79,34 @@
         .btn-up { background-color: var(--accent-purple); }
         .btn-dl { background-color: var(--accent-blue); grid-column: span 2; }
 
+        /* セレクター（録画モード用） */
+        .mode-selector {
+            display: flex;
+            background: #2c2c2e;
+            border-radius: 8px;
+            padding: 2px;
+            margin-top: 5px;
+        }
+        .mode-option {
+            flex: 1;
+            text-align: center;
+            padding: 8px;
+            font-size: 0.75rem;
+            border-radius: 6px;
+            color: #888;
+        }
+        .mode-option.active {
+            background: #444;
+            color: var(--accent-neon);
+            font-weight: bold;
+        }
+
         @keyframes pulse { 50% { opacity: 0.6; } }
 
-        /* スライダー */
         .slider-row { display: flex; align-items: center; gap: 10px; margin: 2px 0; }
         input[type="range"] { flex: 1; height: 30px; accent-color: var(--accent-neon); }
         .label-text { font-family: monospace; font-size: 0.75rem; color: var(--accent-neon); min-width: 40px; }
-        .title-text { font-size: 0.6rem; color: #777; text-transform: uppercase; margin-bottom: -5px; }
+        .title-text { font-size: 0.65rem; color: #777; text-transform: uppercase; margin-bottom: -2px; font-weight: bold; }
 
         .status-bar { font-size: 0.6rem; text-align: center; color: #555; padding-bottom: 5px; }
         #fileInput { display: none; }
@@ -105,6 +123,14 @@
 <div class="controls-panel">
     <div id="settingsArea">
         <div class="settings-content">
+            <div>
+                <div class="title-text">Recording Mode</div>
+                <div class="mode-selector" id="recModeSelector">
+                    <div class="mode-option active" data-mode="skeleton">With Skeleton</div>
+                    <div class="mode-option" data-mode="raw">Raw Video Only</div>
+                </div>
+            </div>
+
             <div>
                 <div class="title-text">Seek / Time</div>
                 <div class="slider-row">
@@ -164,11 +190,19 @@
     let mediaRecorder = null;
     let chunks = [];
     let recordedUrl = null;
+    let currentRecMode = "skeleton"; // "skeleton" or "raw"
 
-    // --- UIトグル ---
-    document.getElementById('toggleSettings').onclick = () => {
-        settingsArea.classList.toggle('open');
-    };
+    // --- UIトグル & モード切替 ---
+    document.getElementById('toggleSettings').onclick = () => settingsArea.classList.toggle('open');
+
+    const modeOptions = document.querySelectorAll('.mode-option');
+    modeOptions.forEach(opt => {
+        opt.onclick = () => {
+            modeOptions.forEach(o => o.classList.remove('active'));
+            opt.classList.add('active');
+            currentRecMode = opt.dataset.mode;
+        };
+    });
 
     const pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
@@ -211,13 +245,10 @@
         if (file) {
             if (stream) stream.getTracks().forEach(t => t.stop());
             recordedUrl = URL.createObjectURL(file);
-            video.srcObject = null;
-            video.src = recordedUrl;
+            video.srcObject = null; video.src = recordedUrl;
             video.playbackRate = speedBar.value;
-            isLive = false;
-            needsSensing = true;
-            recBtn.disabled = false;
-            downloadBtn.disabled = true;
+            isLive = false; needsSensing = true;
+            recBtn.disabled = false; downloadBtn.disabled = true;
             video.play();
             statusMsg.innerText = "FILE LOADED";
         }
@@ -228,20 +259,34 @@
         if (isLive) startCamera();
     };
 
+    // --- 録画管理 (モード切り替えロジック) ---
     recBtn.onclick = () => {
         if (mediaRecorder && mediaRecorder.state === "recording") {
             mediaRecorder.stop();
         } else {
             chunks = [];
-            const canvasStream = canvas.captureStream(30);
+            
+            // モードに応じてソースを選択
+            let captureSource;
+            if (currentRecMode === "skeleton") {
+                captureSource = canvas.captureStream(30);
+            } else {
+                // Rawモード: ライブならカメラストリーム、ファイルならvideo要素から取得
+                captureSource = isLive ? stream : video.captureStream();
+            }
+
             const types = ['video/mp4', 'video/webm;codecs=vp8', 'video/webm'];
             const type = types.find(t => MediaRecorder.isTypeSupported(t)) || '';
-            mediaRecorder = new MediaRecorder(canvasStream, { mimeType: type });
+            mediaRecorder = new MediaRecorder(captureSource, { mimeType: type });
+            
             mediaRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
             mediaRecorder.onstop = () => {
                 const blob = new Blob(chunks, { type: type || 'video/mp4' });
                 recordedUrl = URL.createObjectURL(blob);
-                isLive = false; needsSensing = false;
+                isLive = false;
+                // Rawで録画した場合は再度センシングが必要、Skeletonで録画した場合は不要
+                needsSensing = (currentRecMode === "raw"); 
+                
                 video.srcObject = null; video.src = recordedUrl;
                 statusMsg.innerText = "REVIEW MODE";
                 recBtn.innerText = "録画"; recBtn.classList.remove('active');
@@ -249,13 +294,13 @@
             };
             mediaRecorder.start();
             recBtn.innerText = "停止"; recBtn.classList.add('active');
-            statusMsg.innerText = "RECORDING...";
+            statusMsg.innerText = "RECORDING (" + currentRecMode.toUpperCase() + ")...";
         }
     };
 
     downloadBtn.onclick = () => {
         const a = document.createElement('a');
-        a.href = recordedUrl; a.download = `golf_${new Date().getTime()}.mp4`; a.click();
+        a.href = recordedUrl; a.download = `golf_${currentRecMode}_${new Date().getTime()}.mp4`; a.click();
     };
 
     document.getElementById('playBtn').onclick = () => {
